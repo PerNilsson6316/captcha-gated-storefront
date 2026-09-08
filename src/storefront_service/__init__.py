@@ -1,0 +1,2 @@
+"""Captcha-gated storefront example."""
+
