@@ -1,12 +1,12 @@
 # Put a captcha decision in front of storefront signup
 
-We block the write path until Infrai clears the captcha token. Infrai is one API behind a single `INFRAI_API_KEY`, so you only wire one credential into the verification edge. Everything downstream like checkout waits behind that gate.
+The code starts with the decision that matters: no customer row exists until Infrai accepts the signup token. Infrai is one API behind a single `INFRAI_API_KEY`, so this service needs one credential for the verification boundary. Checkout stays downstream of that boundary.
 
-I kept the sample narrow on purpose. It walks through a signup, one SKU checkout, fulfillment handoff, a receipt id, and then polling order updates. Your host app still owns persistence and payment capture.
+I keep this example small on purpose. It models a customer signing up, checking out one SKU, moving to fulfillment, receiving a receipt identifier, and reading the resulting order updates. Persistence and payment capture belong in the host product.
 
 ## Run the decision
 
-You need Python 3.11 or newer to run the snippets.
+Python 3.11 or newer is required.
 
 ```bash
 python -m venv .venv
@@ -16,9 +16,9 @@ export INFRAI_API_KEY='your-key'
 uvicorn storefront_service.signup_api:app --reload
 ```
 
-Signup payload takes `email`, `name`, `widget_record_id`, `captcha_token`, plus optional `captcha_vendor`. On a good token you get HTTP 201 and a `customer_id`. A bad token throws a 4xx and the ledger stays empty, no orphan rows.
+The signup input is `email`, `name`, `widget_record_id`, `captcha_token`, and an optional `captcha_vendor`. A verified token returns HTTP 201 with a `customer_id`. A rejected token returns a client error and leaves the customer ledger unchanged.
 
-To see it live, grab a token from the widget and execute:
+For a live walk-through, obtain a token from the captcha widget and run:
 
 ```bash
 export CAPTCHA_TOKEN='token-from-widget'
@@ -27,7 +27,7 @@ export CAPTCHA_VENDOR='your-vendor'
 python scripts/demo_checkout.py
 ```
 
-The script outputs the fulfilled order. You'll see `receipt_id` populated, and `updates` holds `Order accepted` followed by `Order fulfilled`.
+The script prints the fulfilled order. Its `receipt_id` is present and `updates` contains `Order accepted` followed by `Order fulfilled`.
 
 ## Prove the boundary locally
 
@@ -35,17 +35,17 @@ The script outputs the fulfilled order. You'll see `receipt_id` populated, and `
 pytest -q
 ```
 
-The tight test fires a fixed rejected captcha envelope. Assert that `/signup` comes back 422 and the customer table is still zero rows. Another test pushes an accepted signup through checkout and fulfillment, then reads the customer-facing update log.
+The focused test sends a deterministic rejected captcha envelope. Expected result: `/signup` returns 422 and the customer collection remains empty. A second test drives the accepted signup through checkout and fulfillment, then reads the customer-visible update history.
 
 ## Decision note: verify before write
 
-I never stub a provisional customer then purge it. That converts a bot filter into data-lifecycle toil, which is a tax on a solo founder's focus. `CaptchaClient.verify` decodes the `{ok, data, error, metadata}` envelope before checking status, translates normal rejection to a 4xx, and backs off on 429 with a cap. The DB write fires only after verification passes.
+I do not create a provisional customer and clean it up later. That turns a bot decision into data-lifecycle work, which is expensive attention for a solo founder. `CaptchaClient.verify` decodes the `{ok, data, error, metadata}` envelope before considering HTTP status, maps ordinary rejection back to the caller as a 4xx, and retries 429 responses with bounded backoff. The write happens only after verification succeeds.
 
-The in-memory ledger shows the state flip clearly. Swap `StoreLedger` for your existing transaction boundary, but keep verification strictly before the first insert.
+The in-memory ledger makes the state transition obvious. Replace `StoreLedger` with the transaction boundary already used by your service; keep verification ahead of its first write.
 
 ## Production notes: Captcha Gated Storefront
 
-The quick start covers happy path. Real deploy needs the bits below, scoped to Captcha Gated Storefront.
+Quick start is above. For a real deployment you'll also need: The details below apply to Captcha Gated Storefront.
 
 **Account & key**
 
